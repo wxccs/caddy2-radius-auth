@@ -9,7 +9,7 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp/caddyauth"
-	"github.com/hashicorp/golang-lru/v2/expirable"
+	"github.com/patrickmn/go-cache"
 	"go.uber.org/zap"
 )
 
@@ -18,12 +18,12 @@ func init() {
 }
 
 type HTTPRadiusAuth struct {
-	Servers  []string                     `json:"servers,omitempty"`   // List of RADIUS servers
-	Secret   string                       `json:"secret,omitempty"`    // Shared secret
-	Realm    string                       `json:"realm,omitempty"`     // Basic Auth realm
-	Timeout  string                       `json:"timeout,omitempty"`   // Connection timeout (default "3s")
-	CacheTTL string                       `json:"cache_ttl,omitempty"` // Cache TTL (0 to disable, default "0s")
-	cache    *expirable.LRU[string, bool] // Internal cache instance
+	Servers  []string     `json:"servers,omitempty"`   // List of RADIUS servers
+	Secret   string       `json:"secret,omitempty"`    // Shared secret
+	Realm    string       `json:"realm,omitempty"`     // Basic Auth realm
+	Timeout  string       `json:"timeout,omitempty"`   // Connection timeout (default "3s")
+	CacheTTL string       `json:"cache_ttl,omitempty"` // Cache TTL (0 to disable, default "0s")
+	cache    *cache.Cache // Internal cache instance
 	logger   *zap.Logger
 }
 
@@ -57,7 +57,7 @@ func (r *HTTPRadiusAuth) Provision(ctx caddy.Context) error {
 	}
 	// Use a reasonable default capacity of 1000 items
 	if cacheTTL > 0 {
-		r.cache = expirable.NewLRU[string, bool](1000, nil, cacheTTL)
+		r.cache = cache.New(cacheTTL, time.Second)
 	} else {
 		r.cache = nil
 	}
@@ -102,7 +102,7 @@ func (r HTTPRadiusAuth) Authenticate(w http.ResponseWriter, req *http.Request) (
 	cacheKey := fmt.Sprintf("%s:%s", user, pass)
 	if r.cache != nil {
 		if cachedResult, found := r.cache.Get(cacheKey); found {
-			if cachedResult {
+			if cachedResult.(bool) {
 				return caddyauth.User{ID: user}, true, nil
 			} else {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -120,7 +120,7 @@ func (r HTTPRadiusAuth) Authenticate(w http.ResponseWriter, req *http.Request) (
 
 	// Cache the result
 	if r.cache != nil {
-		r.cache.Add(cacheKey, ok)
+		r.cache.SetDefault(cacheKey, ok)
 	}
 
 	if !ok {
